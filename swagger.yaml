@@ -1,0 +1,394 @@
+openapi: 3.0.3
+info:
+  title: Event Booking 
+  description: |
+    Mini Event Management System
+  version: 1.0.0
+  contact:
+    email: hr@thelattice.in
+
+servers:
+  - url: http://localhost:3000
+    description: Local development server
+
+tags:
+  - name: Events
+    description: Event management
+  - name: Bookings
+    description: Ticket bookings
+  - name: Users
+    description: User data
+
+paths:
+
+  /events:
+    get:
+      tags: [Events]
+      summary: List all upcoming events
+      description: Returns all events with a date in the future, ordered by date ascending.
+      responses:
+        "200":
+          description: List of upcoming events
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EventListResponse"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+    post:
+      tags: [Events]
+      summary: Create a new event
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateEventBody"
+            example:
+              title: "Node.js Workshop"
+              description: "Hands-on session for beginners"
+              date: "2026-04-15T10:00:00.000Z"
+              capacity: 50
+      responses:
+        "201":
+          description: Event created successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EventResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /bookings:
+    post:
+      tags: [Bookings]
+      summary: Book a ticket for an event
+      description: |
+        Books one ticket for a user. Checks availability and decrements
+        `remaining_tickets` inside a MySQL transaction with `SELECT … FOR UPDATE`
+        to prevent race conditions. Returns a unique booking code (UUID v4).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateBookingBody"
+            example:
+              user_id: 1
+              event_id: 2
+      responses:
+        "201":
+          description: Booking confirmed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BookingResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Conflict — no tickets left, or user already booked
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /users/{id}/bookings:
+    get:
+      tags: [Users]
+      summary: Get all bookings for a user
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: User ID
+          schema:
+            type: integer
+            example: 1
+      responses:
+        "200":
+          description: User bookings retrieved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserBookingsResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /events/{id}/attendance:
+    post:
+      tags: [Events]
+      summary: Record event attendance using booking code
+      description: |
+        Validates the booking code for this event and records the check-in time.
+        Also returns how many total tickets have been booked for the event.
+        Prevents duplicate check-ins.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Event ID
+          schema:
+            type: integer
+            example: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AttendanceBody"
+            example:
+              booking_code: "550e8400-e29b-41d4-a716-446655440000"
+      responses:
+        "200":
+          description: Attendance recorded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AttendanceResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Already checked in
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+components:
+
+  schemas:
+
+    Event:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 1
+        title:
+          type: string
+          example: "Node.js Workshop"
+        description:
+          type: string
+          nullable: true
+          example: "Hands-on session"
+        date:
+          type: string
+          format: date-time
+          example: "2026-04-15T10:00:00.000Z"
+        total_capacity:
+          type: integer
+          example: 50
+        remaining_tickets:
+          type: integer
+          example: 47
+        created_at:
+          type: string
+          format: date-time
+
+    CreateEventBody:
+      type: object
+      required: [title, date, capacity]
+      properties:
+        title:
+          type: string
+          example: "Node.js Workshop"
+        description:
+          type: string
+          nullable: true
+          example: "Hands-on session for beginners"
+        date:
+          type: string
+          format: date-time
+          example: "2026-04-15T10:00:00.000Z"
+        capacity:
+          type: integer
+          minimum: 1
+          example: 50
+
+    CreateBookingBody:
+      type: object
+      required: [user_id, event_id]
+      properties:
+        user_id:
+          type: integer
+          example: 1
+        event_id:
+          type: integer
+          example: 2
+
+    AttendanceBody:
+      type: object
+      required: [booking_code]
+      properties:
+        booking_code:
+          type: string
+          format: uuid
+          example: "550e8400-e29b-41d4-a716-446655440000"
+
+    Booking:
+      type: object
+      properties:
+        booking_id:
+          type: integer
+          example: 7
+        booking_code:
+          type: string
+          format: uuid
+        booking_date:
+          type: string
+          format: date-time
+        event_id:
+          type: integer
+        event_title:
+          type: string
+        event_description:
+          type: string
+          nullable: true
+        event_date:
+          type: string
+          format: date-time
+        checked_in_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    ErrorResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: false
+        message:
+          type: string
+          example: "No tickets remaining for this event"
+
+    EventListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Event"
+
+    EventResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          $ref: "#/components/schemas/Event"
+
+    BookingResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        message:
+          type: string
+          example: "Booking confirmed"
+        data:
+          type: object
+          properties:
+            booking_id:
+              type: integer
+            user_id:
+              type: integer
+            event_id:
+              type: integer
+            event_title:
+              type: string
+            booking_code:
+              type: string
+              format: uuid
+            booking_date:
+              type: string
+              format: date-time
+
+    UserBookingsResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: object
+          properties:
+            user:
+              type: object
+              properties:
+                id:
+                  type: integer
+                name:
+                  type: string
+                email:
+                  type: string
+            bookings:
+              type: array
+              items:
+                $ref: "#/components/schemas/Booking"
+
+    AttendanceResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        message:
+          type: string
+          example: "Attendance recorded"
+        data:
+          type: object
+          properties:
+            booking_code:
+              type: string
+              format: uuid
+            event_id:
+              type: integer
+            user_id:
+              type: integer
+            entry_time:
+              type: string
+              format: date-time
+            total_tickets_booked_for_event:
+              type: integer
+              example: 12
+
+  responses:
+    BadRequest:
+      description: Bad request — missing or invalid fields
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    InternalError:
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
